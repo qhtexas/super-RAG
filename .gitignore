@@ -182,3 +182,4 @@ cython_debug/
 
 .chroma / 
 results / 
+get_res.py
