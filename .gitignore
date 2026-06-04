@@ -180,6 +180,6 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-.chroma / 
-results / 
+.chroma/ 
+results/ 
 get_res.py
