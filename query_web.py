@@ -5,6 +5,7 @@ from typing import Any,Literal
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
+from ollama import chat
 load_dotenv()
 import json
 key = os.getenv("DEEPSEEK")
@@ -41,7 +42,20 @@ store_instance = StoreResult(
         StoreItem(name="example",description="This is a demo")
     ]
 )
+google_json = google_instance.model_dump_json(indent=2)
 
+store_json = store_instance.model_dump_json(indent=2)
+schema_map = {
+        "app_store": StoreResult,
+        "google_play": StoreResult,
+        "web": SortResultBrowser,
+    }
+prompt_example_map = {
+        "app_store": store_json,
+        "google_play": store_json,
+        "web": google_json,
+    }
+source_list = Literal["app_store", "google_play", "web"]
 # 动态寻找 Pydantic 对象中列表长度的万能小函数
 def get_main_list_length(pydantic_obj):
     # 将模型转化为原生字典
@@ -52,16 +66,9 @@ def get_main_list_length(pydantic_obj):
             return len(value)
     return 0
 
-
-import subprocess
 from pathlib import Path
 path1 = Path(__file__).parent / "webpages"
-subprocess.Popen([
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    "--remote-debugging-port=9222",
-    r"--user-data-dir=D:\coding\super RAG\user_data", # 让它自己存 Cookie 养号，别管它
-    "--start-maximized"
-])
+
 
 
 
@@ -122,23 +129,49 @@ def search_wiki(keyword: str) -> str:
             
             
 def get_google(page: Page, keyword: str) -> list[str]:
+    
+    #word = extract(keyword)
+    print(f"extracted keyword:{keyword}")
     url = f"https://www.google.com/search?q={keyword}"
     page.goto(url)
     main = page.locator("#main").locator("#center_col").locator("#search").locator("#rso").locator(".MjjYud")
     print(main.all_inner_texts())
     results = main.all_inner_texts()
-    for result in results:
-        result.replace("Read More","")
+    a = []
+    for result in results[:5]:
+        j = result.replace("Read more","")
+        a.append(j)
     print(results)
-    return results                    
+    formatted = formatter(content=a,source="web")
+    detailed = further_description(content=formatted,source="web")
+    return detailed 
             
 def get_store(page: Page,keyword:str) -> list[str]:
+    #word = extract(keyword)
+    print(f"extracted query:{keyword}")
     path = path1 /"imsta - Android Apps on Google Play.html"
     page.goto(f"https://play.google.com/store/search?q={keyword}&c=apps")
     result = page.locator(".cXFu1")
     print(result.all_inner_texts())#内涵app名字和简短描述
-    return result.all_inner_texts()
+    text = result.all_inner_texts()
+    formatted = formatter(content=text[:5],source="google_play")
+    detailed = further_description(content=formatted,source="google_play")
+    return detailed
 
+def query_app_store(page: Page, keyword:str)->list[str]:
+    #word = extract(keyword)
+    print(f"extracted keyword: {keyword}")
+    page.goto(f"https://www.apple.com/us/search/{keyword}?src=globalnav")
+    texts = page.locator(".as-search-wrapper").locator(".rf-serp-product-description")
+    result = texts.all_inner_texts()
+    appear = []
+    for i in result[:5]:
+        j = i.replace("View more","")
+        appear.append(j)
+    print(appear)
+    formatted = formatter(content=result,source="app_store")
+    detailed = further_description(content=formatted,source="google_play")
+    return detailed
 
 client_formatter = OpenAI(
     base_url="https://api.deepseek.com",
@@ -146,57 +179,70 @@ client_formatter = OpenAI(
 )
 
 
-google_json = google_instance.model_dump_json(indent=2)
-
-store_json = store_instance.model_dump_json(indent=2)
 
 model = [SortResultBrowser,StoreResult]
 
-def query_web(keyword:str) -> list[str]:
-    with sync_playwright() as p:
-        # setting up
-        browser = p.chromium.connect_over_cdp("http://localhost:9222")
-        if not browser.contexts:
-            browser.new_context
-        context = browser.contexts[0]
-        if not context.pages:
-            context.new_page
-        page = context.pages[0]
-        google_result = get_google(page,keyword = keyword)
-        google_play_result = get_store(page, keyword)
+def extract(keyword: str)->str:
+        ollama_system = "You are a helpful formatter, upon given a search query, if it is not a concise word or phrase, you should return only the keyword and nothing else. If it is, return the original word/phrase."
+        messages=[{"role":"system","content":f"{ollama_system}"},{"role":"user","content":f"{keyword}"}]
+        word = ""
+        for _ in range(3):
+            print("AI extract request:", keyword)
+            r = chat(
+                model = "qwen3.5:4b",
+                messages=messages,
+                think= False
+            )
+            print("AI extract raw response:", r.message.content)
+            if r.message.content:
+                try:
+                    if len(r.message.content) > 15:
+                        raise ValueError
+                except ValueError:
+                    messages.append({"role":"user","content":"still not concise enough, try another time"})
+                    continue
+                word = r.message.content
+                break
+            else:
+                messages.append({"role":"user","content":"you should say something..."})
+                continue
+        return word
+
+def formatter(content: list[str], source: source_list) -> list[str]:
         result = []
-        for i, (k,v) in enumerate({google_json:google_result, store_json:google_play_result}.items()):
-            system_prompt = f"""You are a professional recommendation system data extraction agent.
+        system_prompt = f"""You are a professional recommendation system data extraction agent.
             Your task is to read the web search results provided by the user and extract each piece of information clearly and separately, avoiding arbitrary merging.
-            You must output strictly in the required JSON format and remove meaningless content and advertisements. Format: {k}"""
-            user_prompt = f"""
+            You must output strictly in the required JSON format and remove meaningless content and advertisements. Format: {prompt_example_map[source]}"""
+        user_prompt = f"""
             Based on the content captured inside the `<search_results>` tag below, extract the feature data.
             <search_results>
-            {v}
+            {content}
             </search_results>
             Please begin your extraction:
             """
-            messages=[{"role":"system","content":system_prompt},{"role":"user","content":user_prompt}]
-            for j in range(3):
+        messages=[{"role":"system","content":system_prompt},{"role":"user","content":user_prompt}]
+        for j in range(3):
+                print(f"AI formatter request source={source} attempt={j+1}")
                 response = client_formatter.chat.completions.create(
                     model="deepseek-v4-pro",
                     messages=messages,
                     response_format={"type":"json_object"},
                 )
                 text = response.choices[0].message.content
+                print("AI formatter raw response:", text)
                 if text:
                     try:
-                        r = model[i].model_validate_json(text)
+                        r = schema_map[source].model_validate_json(text)
                         result.append(r.model_dump_json())
                         break
                     except ValidationError as e:
                         messages.append(response.choices[0].message)
                         messages.append({"role":"user","content":f"The return format is incorrect, error: {e}"})
                         continue
-            else:
+        else:
                 return []
-    print(result)
-    return result
+        print(result)
+        return result
 
 
 from helper import generate_function_tool
@@ -208,107 +254,122 @@ tools = [
                             )
 ]
 
-def further_description(content: list[str]) -> list[str]:
-    # 🌟 改动三：强力 System Prompt，定死行为边界
-    system_prompt = """You are a rigorous data repair agent.
-    1. Your task is to inspect the description field in the JSON. If it is a meaningless short comment (for example containing "star") or is extremely incomplete, call the search_wikipedia tool to replace it with objective information.
-    2. If the entity cannot be found on Wikipedia, change its description to "No detailed description available". Do not delete the item under any circumstances! You must keep the total number of items in the JSON list exactly the same as before.
-    3. All modifications must be extremely concise, within 50 words, and only describe objective facts.
-    4. If the description is already sufficiently detailed and objective, keep it unchanged; do not add unnecessary expansion.
-    5. Return only the complete modified JSON string, strictly preserving the original schema structure."""
-    
-    json_list = [google_json, store_json]
-    obj = []
-    
-    for i, item in enumerate(content):
-        # 🌟 改动一：智能路由检查，防止“好数据被过度加工”
-        try:
-            data_dict = json.loads(item)
-            needs_fix = False
-            # 尝试扫描所有 description
-            if "result" in data_dict:
-                for entry in data_dict["result"]:
-                    desc = entry.get("description", "")
-                    # 如果描述太短，或者包含应用商店星级等垃圾数据，才需要触发大模型清洗
-                    if len(desc) < 20 or "star" in desc.lower():
-                        needs_fix = True
-                        break
-            
-            if not needs_fix:
-                print(f"✅ 第 {i} 组数据质量良好（如 Google 搜索结果），直接免检放行。")
-                obj.append(item)
-                continue
-        except Exception as e:
-            print(f"⚠️ JSON 初步解析异常，将直接交由大模型处理: {e}")
-            pass
 
-        print(f"🔄 第 {i} 组数据存在瑕疵，正在呼叫 Agent 与 Wikipedia 联动修复...")
+
+
+
+def further_description(content: list[str], source: source_list) -> list[str]:
+    """Repair JSON results from a single source and return the same list-of-JSON-strings format."""
+
+    model_cls = schema_map[source]
+    example_json = prompt_example_map[source]
+
+    system_prompt = """You are a rigorous data repair agent.
+    1. Inspect the description field inside the JSON. If it is meaningless, too short, or contains star rating noise, replace it with objective information.
+    2. If Wikipedia does not have the entity, set "description" to "No detailed description available".
+    3. Preserve the exact number of items in the JSON list. Do not delete or add items.
+    4. Keep modifications concise (within 50 words) and factual.
+    5. Return only the complete modified JSON string in the original schema."""
+
+    def needs_repair(parsed_json: dict) -> bool:
+        if not isinstance(parsed_json, dict):
+            return True
+        for entry in parsed_json.get("result", []):
+            desc = entry.get("description", "")
+            if len(desc.strip()) < 20 or "star" in desc.lower():
+                return True
+        return False
+
+    repaired_results: list[str] = []
+
+    for idx, item in enumerate(content):
+        parsed = None
+        try:
+            parsed = json.loads(item)
+        except json.JSONDecodeError as exc:
+            print(f"⚠️ 第 {idx} 个条目 JSON 解析失败，交给大模型处理: {exc}")
+
+        if parsed is not None and not needs_repair(parsed):
+            print(f"✅ 第 {idx} 组数据无需修复，保持原样。")
+            repaired_results.append(item)
+            continue
+
+        print(f"🔄 第 {idx} 组数据需要修复，启动修复流程...")
         message = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"This is the content you should modify {item}, you should keep the schema {json_list[i]}"}
+            {
+                "role": "user",
+                "content": (
+                    f"Repair the following JSON and preserve its schema exactly as shown:\n{example_json}\n\n"
+                    f"Input: {item}"
+                ),
+            },
         ]
-        
-        for j in range(3):
-            chat = client_formatter.chat.completions.create(
-                model="deepseek-v4-pro", 
+
+        for attempt in range(3):
+            print(f"AI further_description request index={idx} attempt={attempt+1}")
+            chat_response = client_formatter.chat.completions.create(
+                model="deepseek-v4-pro",
                 tools=tools,
                 messages=message,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
-            
-            response_msg = chat.choices[0].message
+
+            response_msg = chat_response.choices[0].message
             text = response_msg.content
-            
-            # 处理工具调用 (Tool Calls)
+            print("AI further_description raw response:", text)
+
             if response_msg.tool_calls:
+                print("AI further_description tool call(s):", [tool_call.function.name for tool_call in response_msg.tool_calls])
                 message.append(response_msg)
-                for tool in response_msg.tool_calls:
-                    args = tool.function.arguments
+                for tool_call in response_msg.tool_calls:
+                    args = tool_call.function.arguments
+                    print(f"AI further_description tool call {tool_call.function.name} args:", args)
                     result = search_wiki(args)
+                    print(f"Tool search_wiki result:", result)
                     message.append({
                         "role": "tool",
-                        "tool_call_id": tool.id, 
-                        "content": f"{result}"
+                        "tool_call_id": tool_call.id,
+                        "content": result,
                     })
-                continue # 工具调用结束后，直接触发下一次请求
-            
-            # 处理大模型最终的 JSON 返回
-            if text:
-                try:
-                    r = model[i].model_validate_json(text)
-                    a = model[i].model_validate_json(content[i])
-                    
-                    if get_main_list_length(r) != get_main_list_length(a):
-                        raise ValueError("大模型擅自增加了或删除了列表内的项目！")
-                        
-                    obj.append(r.model_dump_json())
-                    print(f"🎉 第 {i} 组数据修复并校验成功！")
-                    break
-                    
-                except ValidationError as e:
-                    # 🌟 改动二：打破盲盒，追加 Debug 打印
-                    print(f"⚠️ [第 {j+1}/3 次重试] 格式校验失败: {e}")
-                    message.append(response_msg)
-                    message.append({"role": "user", "content": f"The return format is incorrect, error: {e}"})
-                    continue
-                except ValueError as e:
-                    # 🌟 改动二：打印长度异常警告，并给大模型下达死命令
-                    print(f"⚠️ [第 {j+1}/3 次重试] 列表长度校验失败！")
-                    message.append(response_msg)
-                    message.append({
-                        "role": "user", 
-                        "content": f"Data tampering warning: {e}. Strictly preserve the original list length! If an item cannot be found on Wikipedia, set its description to 'No detailed description available'. Do not remove it from the JSON under any circumstances."
-                    })
-                    continue
+                continue
+
+            if not text:
+                continue
+
+            try:
+                repaired = model_cls.model_validate_json(text)
+                original = model_cls.model_validate_json(item)
+
+                if get_main_list_length(repaired) != get_main_list_length(original):
+                    raise ValueError("列表长度必须与原始输入一致。")
+
+                repaired_results.append(repaired.model_dump_json())
+                print(f"🎉 第 {idx} 组数据修复成功。")
+                break
+
+            except ValidationError as exc:
+                print(f"⚠️ [第 {attempt + 1}/3] 格式校验失败: {exc}")
+                message.append(response_msg)
+                message.append({"role": "user", "content": f"The return format is incorrect, error: {exc}"})
+                continue
+            except ValueError as exc:
+                print(f"⚠️ [第 {attempt + 1}/3] 列表长度校验失败: {exc}")
+                message.append(response_msg)
+                message.append({
+                    "role": "user",
+                    "content": (
+                        "Strictly preserve the original list length. "
+                        "If Wikipedia lookup fails, set description to 'No detailed description available'. "
+                        "Do not remove or add items."
+                    ),
+                })
+                continue
         else:
-            print(f"❌ 第 {i} 组数据经过 3 次重试仍未修复成功，启用原样兜底保留。")
-            obj.append(item) # 兜底保护：即使大模型彻底失败，也把原始数据塞进去，防止后续算法崩溃
-            
-    print("\n--- 终极清洗流水线输出 ---")
-    print(obj)
-    return obj if obj else []
+            print(f"❌ 第 {idx} 组数据三次尝试未修复成功，保留原始 JSON。")
+            repaired_results.append(item)
+
+    return repaired_results
                 
 
-if __name__ == "__main__":
-    result = query_web("instagram")
-    further_description(result)                
+            

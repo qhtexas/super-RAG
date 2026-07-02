@@ -5,7 +5,7 @@ from chromadb.utils.embedding_functions.ollama_embedding_function import (
     OllamaEmbeddingFunction,
 )
 from semantic_chunker import get_chunker
-
+from formatter import key_word_blend
 
 dir_path = Path(__file__).parent / ".chroma"
 dir_path.mkdir(exist_ok=True)
@@ -25,9 +25,14 @@ collection = client.get_or_create_collection(
 path = Path(__file__).parent / "results"
 
 for file_path in path.glob("*.md"):
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, "r+", encoding="utf-8") as f:
         
         content = f.read()
+        print(content)
+        new = key_word_blend(content)
+        print(new)
+        f.write(new)
+        """
         chunker = get_chunker(
         "gpt-3.5-turbo",
         chunking_type="markdown",
@@ -46,6 +51,7 @@ for file_path in path.glob("*.md"):
                 ids=[chunk_id],
                 metadatas=[{"source": file_path.name, "chunk_index": chunk[1]}],
             )
+            """
 
 if __name__ == "__main__":
     response = collection.query(

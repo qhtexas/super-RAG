@@ -18,8 +18,9 @@ collection = client.get_collection(
 )
 
 
-def query_rag(keyword: str):
-    r = GuidelinesQuery.model_validate_json(keyword)
+def query_guidelines(keyword: str):
+    """If you need more detailed information/ clarification of guidelineds, use this tool to get more from database"""
+    r = GuidelinesQuery.model_validate(keyword)
     system_prompt = ("You are a helpful assistant which given the question and background, formulates some query to search the rag database.")
     user_prompt = f"Question: {r.question}\nBackground: {r.background}\nPlease give me some query to search the rag database, and you should return the query"
     
@@ -33,7 +34,7 @@ def query_rag(keyword: str):
                 n_results=3,
                 include = ["documents"],
             )
-    print(response["documents"])
+    print(f"query result {response['documents']}")
     unique_docs_map = {}
     
     # 双层循环解开嵌套：先遍历每一个查询词的返回结果
@@ -47,9 +48,9 @@ def query_rag(keyword: str):
     # 字典的值就是去重后的纯文档列表
     flatten_response = list(unique_docs_map.values())
     
-    return flatten_response
+    return "\n".join(flatten_response)
 
 if __name__ == "__main__":
     while True:
         keyword = input("请输入查询关键词：")
-        query_rag(keyword)
+        query_guidelines(keyword)

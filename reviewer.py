@@ -28,7 +28,7 @@ class Reviewer:
             format = ReviewResult.model_json_schema(),
         )
         if response.message.content:
-            return ReviewResult.model_validate_json(response.message.content)
+            return ReviewResult.model_validate(response.message.content)
         else:
             return ReviewResult(result="", reason="The model did not return any content.")
     
@@ -47,7 +47,7 @@ class Reviewer:
             }
         )
         if response.message.content:
-            return QueryResult.model_validate_json(response.message.content)
+            return QueryResult.model_validate(response.message.content)
         
         else:
             return QueryResult(query=[""])

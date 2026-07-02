@@ -44,7 +44,35 @@ def help_md_formatt(input: str) :
             answer += chunk.message.content
     return answer
 
-
+def key_word_blend(text:str):
+        system = {"role":"system","content":"""You are a helpful assistant, who upon given a text, replace anything related with Apple by using more general words(e.g., phone for IOS, etc.) to make it doesn't appear like come from apple.
+                                                You should only return modified text and nothing else."""}
+        user = {"role":"user","content":f"{text}"}
+        prompt = [system,user]
+        stream = chat(
+            model="qwen3.5:9b",
+            messages=prompt,
+            stream=True,
+        )
+        
+        think = False
+        answer = ""
+        for chunk in stream:
+            if chunk.message.thinking and not think:
+                print("thinking:",end="")
+                think = True
+            if chunk.message.thinking:
+                 print(chunk.message.thinking,end="")
+            elif chunk.message.content:
+                if think:
+                    print('\n\nAnswer:\n', end='')
+                    think = False
+                print(chunk.message.content, end='')
+                answer += chunk.message.content
+        return answer
+            
+            
+            
 if __name__ == "__main__":
     input = "specifically : one of the several keyboards of an organ or harpsichord that controls a separate division of the instrument, each with its own tone color and range of pitches. b : a device or apparatus intended for manual operation"
     help_md_formatt(input)
